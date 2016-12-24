@@ -5,7 +5,9 @@ import numpy as np
 import pywt
 from pyqtgraph.Qt import QtGui
 import pyqtgraph as pg
+from pyqtgraph import opengl
 import kplr
+from scipy import signal
 
 
 tab_names = ['one']
@@ -15,61 +17,61 @@ tab_names = ['one']
 def main():
     app = QtGui.QApplication(sys.argv)
     tabs = QtGui.QTabWidget()
+
     client = kplr.API()
-    planet = client.planet(raw_input('name: '))
+    planet = client.planet(sys.argv[1])
     red = pg.mkBrush('r')
     blue = pg.mkBrush('b')
 
     for tab in tab_names:
-        
+
         scroller = QtGui.QScrollArea()
         vb = pg.GraphicsWindow()
-        vb.setMinimumHeight(1080)
+        vb.setMinimumHeight(1000)
         vb.setMinimumWidth(1920)
         scroller.setWidget(vb)
 
         curves = planet.get_light_curves()
         print len(curves), " curves found."
-        start = input("start: ")
-        stop = input("stop: ")
-        
         ax = vb.addPlot(title=planet.kepler_name)
-        for li, lc in enumerate(curves[start:stop]):
+        all_data = []
+        for li, lc in enumerate(curves):
+            print lc.url
             with lc.open() as f:
                 data = f[1].data
-            print '!'
+            #data = data[np.random.randint(data.shape[0], size=len(data)/2), :]
             time = data['time']
             sapflux = data['sap_flux']
             pdcflux = data['pdcsap_flux']
             qual = data['sap_quality']
             bkg = data['sap_bkg']
+            #import ipdb; ipdb.set_trace()
 
             brush = pg.mkBrush(li)
-            brush2 = pg.mkBrush(li + 2)
 
             m = np.isfinite(time) * np.isfinite(pdcflux)
-            m1 = m * (qual == 0)
-            mu = np.median(pdcflux[m1])
-            f1 = (pdcflux[m1] / mu - 1) * 1e6
-            ax.plot(time[m1], f1, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=brush)
+            mu = np.median(pdcflux[m])
+            norm = (pdcflux[m] / mu - 1) * 1e6
 
-            # m2 = m * (qual != 0)
-            # mu2 = np.median(pdcflux[m2])
-            # f2 = (pdcflux[m2] / mu2 - 1) * 1e6
-            # ax.plot(time[m2], f2, pen=None, symbol='+', symbolPen=None, symbolSize=10, symbolBrush=brush2)
+            # corrected flux and background noise
+            ax.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=brush)
             ax.plot(time, bkg, pen=pg.mkPen('y'))
+            ax.enableAutoRange('y', 0.97)
+            all_data.append(norm)
 
-        # wavelet = 'cmor'
-        # scales = np.arange(1,128)
-        # [cfs,frequencies] = pywt.cwt(sst, scales, wavelet)
-        # power = (abs(cfs)) ** 2
+        all_norm = np.concatenate(all_data)
+        wavelet = 'cmor'
+        scales = np.arange(1,128)
+        [cfs,frequencies] = pywt.cwt(all_norm, scales, wavelet)
+        power = (abs(cfs)) ** 2
 
-        # period = 1. / frequencies
-        # levels = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
-        # img = pg.ImageItem(data[0])
-        # vb.addItem(img)
-        
-        
+        period = 1. / frequencies
+        levels = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
+        vb.nextRow()
+        iview = vb.addViewBox()
+        img = pg.ImageItem()
+        iview.addItem(img)
+        img.setImage(power)
         tabs.addTab(scroller, tab)
 
     tabs.setWindowTitle('Cosmog')

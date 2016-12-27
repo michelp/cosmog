@@ -21,16 +21,16 @@ class PlanetGraph(qt.QWidget):
         self.client = kplr.API()
         self.planet = self.client.planet(sys.argv[1])
 
-        vb = pg.GraphicsWindow()
-        grid.addWidget(vb, 0, 0, 1, 3)
+        win = pg.GraphicsWindow()
+        grid.addWidget(win, 0, 0, 1, 3)
 
         curves = self.planet.get_light_curves()
         print(len(curves), " curves found.")
         start = int(sys.argv[2])
         stop = int(sys.argv[3])
-        ax = vb.addPlot(title=self.planet.kepler_name)
+        ax = win.addPlot(title=self.planet.kepler_name)
         all_time = []
-        all_data = []
+        all_data = [] 
         for li, lc in enumerate(curves[start:stop]):
             with lc.open() as f:
                 data = f[1].data
@@ -50,44 +50,43 @@ class PlanetGraph(qt.QWidget):
             ax.plot(time, bkg, pen=pg.mkPen('y'))
             ax.enableAutoRange('y', 0.97)
             all_time.append(time[m])
-            all_data.append(norm)
+            all_data.append(pdcflux[m])
 
         all_time = np.concatenate(all_time)
         all_norm = np.concatenate(all_data)
-        
-        # wavelet = 'cmor'
-        # scales = np.arange(1,128)
-        # [cfs, frequencies] = pywt.cwt(all_norm, scales, wavelet)
+
+        #import ipdb; ipdb.set_trace()
+
+        # dt = all_time[1] - all_time[0]
+        # scales = np.arange(1,64)
+        # [cfs, frequencies] = pywt.cwt(all_norm, scales, wavelet, dt)
         # power = (abs(cfs)) ** 2
 
+        # period = 1. / frequencies
+
         wavelet = 'db12'
-        level = 6
+        level = 9
         order = "freq"  # other option is "normal"
 
-        # Construct wavelet packet
-        all_norm = signal.decimate(all_norm, 4)
         wp = pywt.WaveletPacket(all_norm, wavelet, 'symmetric', maxlevel=level)
         nodes = wp.get_level(level, order=order)
-        
         labels = [n.path for n in nodes]
         values = np.array([n.data for n in nodes], 'd')
-        values = abs(values) ** 2
+        power = abs(values) ** 2
 
-        # import ipdb; ipdb.set_trace()
-
-        #period = 1. / frequencies
-        xdict = dict(enumerate(labels))
+        xdict = dict(enumerate(map(str, labels)))
 
         axis = pg.AxisItem('left')
         axis.setTicks([xdict])
         img_view = pg.PlotItem(axis_items=dict(left=axis))
         img_view.showAxis('left')
+        img_view.enableAutoRange()
         img_box = img_view.getViewBox()
-        img_box.setLimits(xMin=0, yMin=0, yMax=len(labels))
+        img_box.setLimits(xMin=0, yMin=0)
         
         img = pg.ImageView(view=img_view)
-        img.setImage(values.T)
-        img.autoLevels()
+        img.setImage(np.log2(power.T))
+        img_box.invertY(False)
         grid.addWidget(img, 1, 0, 1, 2)
 
         pixels = pg.ImageView()
@@ -95,7 +94,7 @@ class PlanetGraph(qt.QWidget):
         tpfs = self.planet.get_target_pixel_files()
 
         all_flux = []
-        import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         for ti, tpf in enumerate(tpfs[start:stop]):
             with tpf.open() as f:
                 data = f[1].data
@@ -104,9 +103,7 @@ class PlanetGraph(qt.QWidget):
             flux2 = np.asarray([misc.imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])
             all_flux.append(flux2)
 
-        import ipdb; ipdb.set_trace()
-
-        all_flux = np.asarray(all_flux)
+        all_flux = np.concatenate(all_flux)
         pixels.setImage(all_flux)
         grid.addWidget(pixels, 1, 2)
             

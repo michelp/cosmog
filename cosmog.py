@@ -29,7 +29,8 @@ class PlanetGraph(qt.QWidget):
         self.light_curve.setDownsampling(auto=True, mode='subsample')
         self.light_curve.setClipToView(True)
         self.light_curve.showGrid(x=True, y=True)
-        self.grid.addWidget(self.light_curve, 0, 0, 1, 4)
+        self.light_curve.showButtons()
+        self.grid.addWidget(self.light_curve, 0, 0, 1, 3)
 
         region = pg.LinearRegionItem()
         region.setZValue(10)
@@ -69,16 +70,14 @@ class PlanetGraph(qt.QWidget):
         img_box = img_view.getViewBox()
         img_box.setLimits(xMin=0, yMin=0)
 
-        img = pg.ImageView(view=img_view)
-        #img.setImage(np.log2(power.T))
-        img_box.invertY(False)
-        self.grid.addWidget(img, 1, 0, 1, 2)
+        self.results = pg.ImageView(view=img_view)
+        #self.results.setImage(np.log2(power.T))
+        self.grid.addWidget(self.results, 1, 0, 1, 3)
 
-        pixels = pg.ImageView()
+        self.pixels = pg.ImageView()
         tpfs = self.planet.get_target_pixel_files()
 
         self.all_flux = []
-        #import ipdb; ipdb.set_trace()
         for ti, tpf in enumerate(tpfs[start:stop]):
             with tpf.open() as f:
                 data = f[1].data
@@ -88,16 +87,19 @@ class PlanetGraph(qt.QWidget):
             self.all_flux.append(flux2)
 
         self.all_flux = np.concatenate(self.all_flux)
-        pixels.setImage(self.all_flux)
-        self.grid.addWidget(pixels, 1, 2)
+        self.pixels.setImage(self.all_flux)
+        self.grid.addWidget(self.pixels, 0, 3)
 
         self.console = pyqtgraph.console.ConsoleWidget(
             namespace=dict(
-                planet=self,
+                planet=self.planet,
                 np=np,
                 pg=pg,
                 sp=sp,
                 signal=signal,
+                lc=self.light_curve,
+                res=self.results,
+                tps=self.pixels,
             ))
         self.grid.addWidget(self.console, 1, 3)
 
@@ -118,6 +120,7 @@ class PlanetGraph(qt.QWidget):
                 pass
             self.vLine.setPos(mousePoint.x())
             self.hLine.setPos(mousePoint.y())
+            self.pixels.setCurrentIndex(index * 24)
 
 class MainWindow(qt.QMainWindow):
     def __init__(self):

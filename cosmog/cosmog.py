@@ -1,5 +1,6 @@
 
 import sys
+from bisect import bisect_left
 
 import pywt
 import kplr
@@ -7,39 +8,76 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.console
 from pyqtgraph.Qt import QtGui as qt
+from PyQt5.QtCore import Qt
 from scipy import signal, misc
 import scipy as sp
 
+class PlanetDialog(qt.QDialog):
+    def __init__(self, parent = None):
+        super(PlanetDialog, self).__init__(parent)
+
+        layout = qt.QVBoxLayout(self)
+
+        self.planet = qt.QLineEdit(self)
+        self.start = qt.QLineEdit(self)
+        self.stop = qt.QLineEdit(self)
+        layout.addWidget(self.planet)
+        layout.addWidget(self.start)
+        layout.addWidget(self.stop)
+
+        self.buttons = qt.QDialogButtonBox(
+            qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel,
+            Qt.Horizontal, self)
+        layout.addWidget(self.buttons)
+
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+
+    def accept(self, *args):
+        print(args)
+
+
 class PlanetGraph(qt.QWidget):
 
-    def __init__(self, name, start=0, stop=-1):
+    def __init__(self, planet, start=0, stop=-1):
         super().__init__()
-        self.setupLightCurve(name, start, stop)
+        self.setupModel(planet, start, stop)
+        self.setupGrid()
+        self.setupLightCurve()
         self.setupCrosshair()
+        self.setupTargetPixels()
+        self.setupSpectrumPlot()
+        self.loadLightCurves()
+        self.loadTargetPixels()
+        self.setupConsole()
 
-    def setupLightCurve(self, planet, start=0, stop=-1):
+    def setupModel(self, planet, start, stop):
         self.client = kplr.API()
         self.planet = self.client.planet(planet)
+        self.curve_data = self.planet.get_light_curves()
+        self.tpfs = self.planet.get_target_pixel_files()
+        self.start = start
+        self.stop = stop
+
+    def setupGrid(self):
         self.grid = qt.QGridLayout()
         self.setLayout(self.grid)
 
-        curves = self.planet.get_light_curves()
-
+    def setupLightCurve(self):
         self.light_curve = pg.PlotWidget(name=self.planet.kepler_name)
         self.light_curve.setDownsampling(auto=True, mode='subsample')
         self.light_curve.setClipToView(True)
         self.light_curve.showGrid(x=True, y=True)
         self.light_curve.showButtons()
+        self.label = pg.LabelItem(justify='right')
+        self.light_curve.addItem(self.label)
+        self.light_curve.setAutoVisible(y=True)
         self.grid.addWidget(self.light_curve, 0, 0, 1, 3)
 
-        region = pg.LinearRegionItem()
-        region.setZValue(10)
-        self.light_curve.addItem(region, ignoreBounds=True)
-        self.light_curve.setAutoVisible(y=True)
-        
-        all_time = []
-        all_data = []
-        for li, lc in enumerate(curves[start:stop]):
+    def loadLightCurves(self):
+        self.all_time = []
+        self.all_data = []
+        for li, lc in enumerate(self.curve_data[self.start:self.stop]):
             with lc.open() as f:
                 data = f[1].data
             time = data['time']
@@ -56,14 +94,14 @@ class PlanetGraph(qt.QWidget):
             self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
             self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
             self.light_curve.enableAutoRange('y', 0.97)
-            all_time.append(time[m])
-            all_data.append(pdcflux[m])
+            self.all_time.append(time[m])
+            self.all_data.append(pdcflux[m])
 
-        all_time = np.concatenate(all_time)
-        self.all_norm = np.concatenate(all_data)
-        
+        self.all_time = np.concatenate(self.all_time)
+        self.all_norm = np.concatenate(self.all_data)
+
+    def setupSpectrumPlot(self):
         axis = pg.AxisItem('left')
-        #axis.setTicks([xdict])
         img_view = pg.PlotItem(axis_items=dict(left=axis))
         img_view.showAxis('left')
         img_view.enableAutoRange()
@@ -74,22 +112,12 @@ class PlanetGraph(qt.QWidget):
         #self.results.setImage(np.log2(power.T))
         self.grid.addWidget(self.results, 1, 0, 1, 3)
 
+
+    def setupTargetPixels(self):
         self.pixels = pg.ImageView()
-        tpfs = self.planet.get_target_pixel_files()
-
-        self.all_flux = []
-        for ti, tpf in enumerate(tpfs[start:stop]):
-            with tpf.open() as f:
-                data = f[1].data
-                aperture = f[2].data
-            time, flux = data['time'], data['flux']
-            flux2 = np.asarray([misc.imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])
-            self.all_flux.append(flux2)
-
-        self.all_flux = np.concatenate(self.all_flux)
-        self.pixels.setImage(self.all_flux)
         self.grid.addWidget(self.pixels, 0, 3)
 
+    def setupConsole(self):
         self.console = pyqtgraph.console.ConsoleWidget(
             namespace=dict(
                 planet=self.planet,
@@ -100,10 +128,30 @@ class PlanetGraph(qt.QWidget):
                 lc=self.light_curve,
                 res=self.results,
                 tps=self.pixels,
+                all_norm=self.all_norm,
+                all_flux=self.all_flux,
+                all_time=self.all_time,
+                all_data=self.all_data,
             ))
         self.grid.addWidget(self.console, 1, 3)
 
+    def loadTargetPixels(self):
+        self.all_flux = []
+        for ti, tpf in enumerate(self.tpfs[self.start:self.stop]):
+            with tpf.open() as f:
+                data = f[1].data
+                aperture = f[2].data
+            time, flux = data['time'], data['flux']
+            flux2 = np.asarray([misc.imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
+            self.all_flux.append(flux2)
+
+        self.all_flux = np.concatenate(self.all_flux)
+        self.pixels.setImage(self.all_flux)
+
     def setupCrosshair(self):
+        region = pg.LinearRegionItem()
+        region.setZValue(10)
+        self.light_curve.addItem(region, ignoreBounds=True)
         self.vLine = pg.InfiniteLine(angle=90, movable=False)
         self.hLine = pg.InfiniteLine(angle=0, movable=False)
         self.light_curve.addItem(self.vLine, ignoreBounds=True)
@@ -116,11 +164,11 @@ class PlanetGraph(qt.QWidget):
             mousePoint = self.light_curve.getViewBox().mapSceneToView(pos)
             index = int(mousePoint.x())
             if index > 0 and index < len(self.all_flux):
-                #self.label.setText("<span style='font-size: 12pt'>x=%0.1f," % (mousePoint.x(),))
-                pass
+                self.label.setText("<span style='font-size: 12pt'>x=%0.1f</span>" % (mousePoint.x(),))
+
             self.vLine.setPos(mousePoint.x())
             self.hLine.setPos(mousePoint.y())
-            self.pixels.setCurrentIndex(index * 24)
+            self.pixels.setCurrentIndex(bisect_left(self.all_time, mousePoint.x()))
 
 class MainWindow(qt.QMainWindow):
     def __init__(self):
@@ -136,12 +184,15 @@ class MainWindow(qt.QMainWindow):
         self.createToolBars()
         self.createStatusBar()
 
-    def newPlanet(self):
-        text, ok = qt.QInputDialog.getText(self, 'Choose Planet', 
-            'Enter Planet:')
-        
+    def newPlanet(self, *args):
+        text, ok = qt.QInputDialog.getText(self, 'Choose Planet',
+                                           'Enter Planet:')
         if ok:
             self.tabs.addTab(PlanetGraph(text), 'Planet ' + text)
+
+# text, ok = qt.QInputDialog().
+#         dialog.exec_()
+#         self.tabs.addTab(PlanetGraph(dialog.planet.text()), 'Planet ' + text)
 
     def closeCurrentPlanet(self):
         self.closePlanet(self.tabs.currentIndex())

@@ -9,7 +9,8 @@ import pyqtgraph as pg
 import pyqtgraph.console
 from pyqtgraph.Qt import QtGui as qt
 from PyQt5.QtCore import Qt
-from scipy import signal, misc
+from scipy import signal
+from scipy.misc import imresize
 import scipy as sp
 
 class PlanetDialog(qt.QDialog):
@@ -44,11 +45,12 @@ class PlanetGraph(qt.QWidget):
         self.setupModel(planet, start, stop)
         self.setupGrid()
         self.setupLightCurve()
-        self.setupCrosshair()
         self.setupTargetPixels()
         self.setupSpectrumPlot()
         self.loadLightCurves()
         self.loadTargetPixels()
+        self.setupRegion()
+        self.setupCrosshair()
         self.setupConsole()
 
     def setupModel(self, planet, start, stop):
@@ -93,6 +95,7 @@ class PlanetGraph(qt.QWidget):
             # corrected flux and background noise
             self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
             self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
+            self.spectrum.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
             self.light_curve.enableAutoRange('y', 0.97)
             self.all_time.append(time[m])
             self.all_data.append(pdcflux[m])
@@ -101,21 +104,12 @@ class PlanetGraph(qt.QWidget):
         self.all_norm = np.concatenate(self.all_data)
 
     def setupSpectrumPlot(self):
-        axis = pg.AxisItem('left')
-        img_view = pg.PlotItem(axis_items=dict(left=axis))
-        img_view.showAxis('left')
-        img_view.enableAutoRange()
-        img_box = img_view.getViewBox()
-        img_box.setLimits(xMin=0, yMin=0)
-
-        self.results = pg.ImageView(view=img_view)
-        #self.results.setImage(np.log2(power.T))
-        self.grid.addWidget(self.results, 1, 0, 1, 3)
-
+        self.spectrum = pg.PlotWidget()
+        self.grid.addWidget(self.spectrum, 1, 0, 1, 3)
 
     def setupTargetPixels(self):
         self.pixels = pg.ImageView()
-        self.grid.addWidget(self.pixels, 0, 3)
+        self.grid.addWidget(self.pixels, 1, 3)
 
     def setupConsole(self):
         self.console = pyqtgraph.console.ConsoleWidget(
@@ -126,14 +120,14 @@ class PlanetGraph(qt.QWidget):
                 sp=sp,
                 signal=signal,
                 lc=self.light_curve,
-                res=self.results,
+                res=self.spectrum,
                 tps=self.pixels,
                 all_norm=self.all_norm,
                 all_flux=self.all_flux,
                 all_time=self.all_time,
                 all_data=self.all_data,
             ))
-        self.grid.addWidget(self.console, 1, 3)
+        self.grid.addWidget(self.console, 0, 3)
 
     def loadTargetPixels(self):
         self.all_flux = []
@@ -142,26 +136,44 @@ class PlanetGraph(qt.QWidget):
                 data = f[1].data
                 aperture = f[2].data
             time, flux = data['time'], data['flux']
-            flux2 = np.asarray([misc.imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
+            flux2 = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
             self.all_flux.append(flux2)
 
         self.all_flux = np.concatenate(self.all_flux)
         self.pixels.setImage(self.all_flux)
 
+    def updateRegionChanged(self):
+        self.region.setZValue(10)
+        minX, maxX = self.region.getRegion()
+        self.spectrum.setXRange(minX, maxX, padding=0)    
+
+    def updateRange(self, window, viewRange):
+        rgn = viewRange[0]
+        self.region.setRegion(rgn)
+
+    def setupRegion(self):
+        self.region = pg.LinearRegionItem()
+        self.region.setZValue(10)
+        self.light_curve.addItem(self.region, ignoreBounds=True)
+        self.light_curve.setAutoVisible(y=True)
+        self.region.sigRegionChanged.connect(self.updateRegionChanged)
+        self.spectrum.sigRangeChanged.connect(self.updateRange)
+        self.region.setRegion([0., 90.])
+
     def setupCrosshair(self):
         region = pg.LinearRegionItem()
         region.setZValue(10)
-        self.light_curve.addItem(region, ignoreBounds=True)
+        self.spectrum.addItem(region, ignoreBounds=True)
         self.vLine = pg.InfiniteLine(angle=90, movable=False)
         self.hLine = pg.InfiniteLine(angle=0, movable=False)
-        self.light_curve.addItem(self.vLine, ignoreBounds=True)
-        self.light_curve.addItem(self.hLine, ignoreBounds=True)
-        self.ligh_curve_mouse_proxy = pg.SignalProxy(self.light_curve.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
+        self.spectrum.addItem(self.vLine, ignoreBounds=True)
+        self.spectrum.addItem(self.hLine, ignoreBounds=True)
+        self.spectrum_mouse_proxy = pg.SignalProxy(self.spectrum.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
 
     def mouseMoved(self, evt):
         pos = evt[0]  ## using signal proxy turns original arguments into a tuple
-        if self.light_curve.sceneBoundingRect().contains(pos):
-            mousePoint = self.light_curve.getViewBox().mapSceneToView(pos)
+        if self.spectrum.sceneBoundingRect().contains(pos):
+            mousePoint = self.spectrum.getViewBox().mapSceneToView(pos)
             index = int(mousePoint.x())
             if index > 0 and index < len(self.all_flux):
                 self.label.setText("<span style='font-size: 12pt'>x=%0.1f</span>" % (mousePoint.x(),))

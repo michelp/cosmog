@@ -13,34 +13,10 @@ from scipy import signal
 from scipy.misc import imresize
 import scipy as sp
 
-class PlanetDialog(qt.QDialog):
-    def __init__(self, parent = None):
-        super(PlanetDialog, self).__init__(parent)
-
-        layout = qt.QVBoxLayout(self)
-
-        self.planet = qt.QLineEdit(self)
-        self.start = qt.QLineEdit(self)
-        self.stop = qt.QLineEdit(self)
-        layout.addWidget(self.planet)
-        layout.addWidget(self.start)
-        layout.addWidget(self.stop)
-
-        self.buttons = qt.QDialogButtonBox(
-            qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel,
-            Qt.Horizontal, self)
-        layout.addWidget(self.buttons)
-
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-
-    def accept(self, *args):
-        print(args)
-
 
 class PlanetGraph(qt.QWidget):
 
-    def __init__(self, planet, start=0, stop=-1):
+    def __init__(self, planet, start=0, stop=10):
         super().__init__()
         self.setupModel(planet, start, stop)
         self.setupGrid()
@@ -67,12 +43,12 @@ class PlanetGraph(qt.QWidget):
 
     def setupLightCurve(self):
         self.light_curve = pg.PlotWidget(name=self.planet.kepler_name)
-        self.light_curve.setDownsampling(auto=True, mode='subsample')
+        self.light_curve.setDownsampling(auto=True)
         self.light_curve.setClipToView(True)
         self.light_curve.showGrid(x=True, y=True)
         self.light_curve.showButtons()
-        self.label = pg.LabelItem(justify='right')
-        self.light_curve.addItem(self.label)
+        self.text = pg.TextItem(justify='right')
+        self.light_curve.addItem(self.text)
         self.light_curve.setAutoVisible(y=True)
         self.grid.addWidget(self.light_curve, 0, 0, 1, 3)
 
@@ -95,7 +71,8 @@ class PlanetGraph(qt.QWidget):
             # corrected flux and background noise
             self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
             self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
-            self.spectrum.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
+            
+            self.zoom_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
             self.light_curve.enableAutoRange('y', 0.97)
             self.all_time.append(time[m])
             self.all_data.append(pdcflux[m])
@@ -104,8 +81,8 @@ class PlanetGraph(qt.QWidget):
         self.all_norm = np.concatenate(self.all_data)
 
     def setupSpectrumPlot(self):
-        self.spectrum = pg.PlotWidget()
-        self.grid.addWidget(self.spectrum, 1, 0, 1, 3)
+        self.zoom_curve = pg.PlotWidget()
+        self.grid.addWidget(self.zoom_curve, 1, 0, 1, 3)
 
     def setupTargetPixels(self):
         self.pixels = pg.ImageView()
@@ -120,7 +97,7 @@ class PlanetGraph(qt.QWidget):
                 sp=sp,
                 signal=signal,
                 lc=self.light_curve,
-                res=self.spectrum,
+                res=self.zoom_curve,
                 tps=self.pixels,
                 all_norm=self.all_norm,
                 all_flux=self.all_flux,
@@ -145,7 +122,7 @@ class PlanetGraph(qt.QWidget):
     def updateRegionChanged(self):
         self.region.setZValue(10)
         minX, maxX = self.region.getRegion()
-        self.spectrum.setXRange(minX, maxX, padding=0)    
+        self.zoom_curve.setXRange(minX, maxX, padding=0)    
 
     def updateRange(self, window, viewRange):
         rgn = viewRange[0]
@@ -157,26 +134,26 @@ class PlanetGraph(qt.QWidget):
         self.light_curve.addItem(self.region, ignoreBounds=True)
         self.light_curve.setAutoVisible(y=True)
         self.region.sigRegionChanged.connect(self.updateRegionChanged)
-        self.spectrum.sigRangeChanged.connect(self.updateRange)
+        self.zoom_curve.sigRangeChanged.connect(self.updateRange)
         self.region.setRegion([0., 90.])
 
     def setupCrosshair(self):
         region = pg.LinearRegionItem()
         region.setZValue(10)
-        self.spectrum.addItem(region, ignoreBounds=True)
+        self.zoom_curve.addItem(region, ignoreBounds=True)
         self.vLine = pg.InfiniteLine(angle=90, movable=False)
         self.hLine = pg.InfiniteLine(angle=0, movable=False)
-        self.spectrum.addItem(self.vLine, ignoreBounds=True)
-        self.spectrum.addItem(self.hLine, ignoreBounds=True)
-        self.spectrum_mouse_proxy = pg.SignalProxy(self.spectrum.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
+        self.zoom_curve.addItem(self.vLine, ignoreBounds=True)
+        self.zoom_curve.addItem(self.hLine, ignoreBounds=True)
+        self.zoom_curve_mouse_proxy = pg.SignalProxy(self.zoom_curve.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
 
     def mouseMoved(self, evt):
         pos = evt[0]  ## using signal proxy turns original arguments into a tuple
-        if self.spectrum.sceneBoundingRect().contains(pos):
-            mousePoint = self.spectrum.getViewBox().mapSceneToView(pos)
+        if self.zoom_curve.sceneBoundingRect().contains(pos):
+            mousePoint = self.zoom_curve.getViewBox().mapSceneToView(pos)
             index = int(mousePoint.x())
             if index > 0 and index < len(self.all_flux):
-                self.label.setText("<span style='font-size: 12pt'>x=%0.1f</span>" % (mousePoint.x(),))
+                self.text.setText("<span style='font-size: 12pt'>x=%0.1f</span>" % (mousePoint.x(),))
 
             self.vLine.setPos(mousePoint.x())
             self.hLine.setPos(mousePoint.y())
@@ -238,6 +215,31 @@ class MainWindow(qt.QMainWindow):
         self.statusBar().showMessage('Ready')
 
 
+class PlanetDialog(qt.QDialog):
+    def __init__(self, parent = None):
+        super(PlanetDialog, self).__init__(parent)
+
+        layout = qt.QVBoxLayout(self)
+
+        self.planet = qt.QLineEdit(self)
+        self.start = qt.QLineEdit(self)
+        self.stop = qt.QLineEdit(self)
+        layout.addWidget(self.planet)
+        layout.addWidget(self.start)
+        layout.addWidget(self.stop)
+
+        self.buttons = qt.QDialogButtonBox(
+            qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel,
+            Qt.Horizontal, self)
+        layout.addWidget(self.buttons)
+
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+
+    def accept(self, *args):
+        print(args)
+
+        
 if __name__ == '__main__':
     import sys, time
     app = qt.QApplication(sys.argv)

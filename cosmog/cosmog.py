@@ -1,6 +1,6 @@
-
 import sys
 from bisect import bisect_left
+import time
 
 import pywt
 import kplr
@@ -22,7 +22,7 @@ class PlanetGraph(qt.QWidget):
         self.setupGrid()
         self.setupLightCurve()
         self.setupTargetPixels()
-        self.setupSpectrumPlot()
+        self.setupZoomPlot()
         self.loadLightCurves()
         self.loadTargetPixels()
         self.setupRegion()
@@ -47,10 +47,69 @@ class PlanetGraph(qt.QWidget):
         self.light_curve.setClipToView(True)
         self.light_curve.showGrid(x=True, y=True)
         self.light_curve.showButtons()
-        self.text = pg.TextItem(justify='right')
-        self.light_curve.addItem(self.text)
         self.light_curve.setAutoVisible(y=True)
+        self.light_curve.enableAutoRange('y', 0.97)
         self.grid.addWidget(self.light_curve, 0, 0, 1, 3)
+
+    def setupZoomPlot(self):
+        self.zoom_curve = pg.PlotWidget(name=self.planet.kepler_name)
+        self.zoom_curve.setDownsampling(auto=True)
+        #self.zoom_curve.setClipToView(True)
+        #self.zoom_curve.showGrid(x=True, y=True)
+        #self.zoom_curve.showButtons()
+        #self.zoom_curve.setAutoVisible(y=True)
+        self.grid.addWidget(self.zoom_curve, 1, 0, 1, 3)
+
+    def setupTargetPixels(self):
+        self.pixels = pg.ImageView()
+        self.grid.addWidget(self.pixels, 1, 3)
+
+    def setupConsole(self):
+        self.console = pyqtgraph.console.ConsoleWidget(
+            namespace=dict(
+                self=self,
+                planet=self.planet,
+                np=np,
+                pg=pg,
+                sp=sp,
+                signal=signal,
+            ))
+        self.grid.addWidget(self.console, 0, 3)
+
+    def setupRegion(self):
+        self.region = pg.LinearRegionItem()
+        self.region.setZValue(10)
+        self.light_curve.addItem(self.region, ignoreBounds=True)
+        self.light_curve.setAutoVisible(y=True)
+        self.region.sigRegionChanged.connect(self.updateRegionChanged)
+        self.zoom_curve.sigRangeChanged.connect(self.updateRange)
+        self.region.setRegion([90., 180.])
+
+    def setupCrosshair(self):
+        # region = pg.LinearRegionItem()
+        # region.setZValue(10)
+        # self.zoom_curve.addItem(region, ignoreBounds=True)
+        self.last_update = time.time()
+        self.vLine = pg.InfiniteLine(angle=90, movable=False)
+        self.hLine = pg.InfiniteLine(angle=0, movable=False)
+        self.zoom_curve.addItem(self.vLine, ignoreBounds=True)
+        self.zoom_curve.addItem(self.hLine, ignoreBounds=True)
+        self.zoom_curve_mouse_proxy = pg.SignalProxy(self.zoom_curve.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
+
+    def mouseMoved(self, evt):
+        if time.time() - self.last_update < 0.1:
+            return
+        self.time = time.time()
+        pos = evt[0]  ## using signal proxy turns original arguments into a tuple
+        if self.zoom_curve.sceneBoundingRect().contains(pos):
+            mousePoint = self.zoom_curve.getViewBox().mapSceneToView(pos)
+            index = int(mousePoint.x())
+            # if index > 0 and index < len(self.all_flux):
+            #     self.text.setHtml("<span style='font-size: 12pt'>x=%0.1f</span>" % (mousePoint.x(),))
+
+            self.vLine.setPos(mousePoint.x())
+            self.hLine.setPos(mousePoint.y())
+            self.pixels.setCurrentIndex(bisect_left(self.all_time, mousePoint.x()))
 
     def loadLightCurves(self):
         self.all_time = []
@@ -69,42 +128,17 @@ class PlanetGraph(qt.QWidget):
             norm = (pdcflux[m] / mu - 1) * 1e6
 
             # corrected flux and background noise
-            self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
-            self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
-            
-            self.zoom_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
-            self.light_curve.enableAutoRange('y', 0.97)
-            self.all_time.append(time[m])
-            self.all_data.append(pdcflux[m])
+            #self.all_data.append(pdcflux[m])
+            self.plotLightCurve(time, m, norm, bkg, li)
 
         self.all_time = np.concatenate(self.all_time)
-        self.all_norm = np.concatenate(self.all_data)
+        #self.all_norm = np.concatenate(self.all_data)
 
-    def setupSpectrumPlot(self):
-        self.zoom_curve = pg.PlotWidget()
-        self.grid.addWidget(self.zoom_curve, 1, 0, 1, 3)
-
-    def setupTargetPixels(self):
-        self.pixels = pg.ImageView()
-        self.grid.addWidget(self.pixels, 1, 3)
-
-    def setupConsole(self):
-        self.console = pyqtgraph.console.ConsoleWidget(
-            namespace=dict(
-                planet=self.planet,
-                np=np,
-                pg=pg,
-                sp=sp,
-                signal=signal,
-                lc=self.light_curve,
-                res=self.zoom_curve,
-                tps=self.pixels,
-                all_norm=self.all_norm,
-                all_flux=self.all_flux,
-                all_time=self.all_time,
-                all_data=self.all_data,
-            ))
-        self.grid.addWidget(self.console, 0, 3)
+    def plotLightCurve(self, time, m, norm, bkg, li):
+        self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
+        self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
+        self.zoom_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
+        self.all_time.append(time[m])
 
     def loadTargetPixels(self):
         self.all_flux = []
@@ -116,48 +150,18 @@ class PlanetGraph(qt.QWidget):
             flux2 = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
             self.all_flux.append(flux2)
 
-        self.all_flux = np.concatenate(self.all_flux)
-        self.pixels.setImage(self.all_flux)
+        all_flux = np.concatenate(self.all_flux)
+        self.pixels.setImage(all_flux)
 
     def updateRegionChanged(self):
         self.region.setZValue(10)
         minX, maxX = self.region.getRegion()
-        self.zoom_curve.setXRange(minX, maxX, padding=0)    
+        self.zoom_curve.setXRange(minX, maxX, padding=0)
 
     def updateRange(self, window, viewRange):
         rgn = viewRange[0]
         self.region.setRegion(rgn)
 
-    def setupRegion(self):
-        self.region = pg.LinearRegionItem()
-        self.region.setZValue(10)
-        self.light_curve.addItem(self.region, ignoreBounds=True)
-        self.light_curve.setAutoVisible(y=True)
-        self.region.sigRegionChanged.connect(self.updateRegionChanged)
-        self.zoom_curve.sigRangeChanged.connect(self.updateRange)
-        self.region.setRegion([0., 90.])
-
-    def setupCrosshair(self):
-        region = pg.LinearRegionItem()
-        region.setZValue(10)
-        self.zoom_curve.addItem(region, ignoreBounds=True)
-        self.vLine = pg.InfiniteLine(angle=90, movable=False)
-        self.hLine = pg.InfiniteLine(angle=0, movable=False)
-        self.zoom_curve.addItem(self.vLine, ignoreBounds=True)
-        self.zoom_curve.addItem(self.hLine, ignoreBounds=True)
-        self.zoom_curve_mouse_proxy = pg.SignalProxy(self.zoom_curve.scene().sigMouseMoved, rateLimit=60, slot=self.mouseMoved)
-
-    def mouseMoved(self, evt):
-        pos = evt[0]  ## using signal proxy turns original arguments into a tuple
-        if self.zoom_curve.sceneBoundingRect().contains(pos):
-            mousePoint = self.zoom_curve.getViewBox().mapSceneToView(pos)
-            index = int(mousePoint.x())
-            if index > 0 and index < len(self.all_flux):
-                self.text.setText("<span style='font-size: 12pt'>x=%0.1f</span>" % (mousePoint.x(),))
-
-            self.vLine.setPos(mousePoint.x())
-            self.hLine.setPos(mousePoint.y())
-            self.pixels.setCurrentIndex(bisect_left(self.all_time, mousePoint.x()))
 
 class MainWindow(qt.QMainWindow):
     def __init__(self):
@@ -239,7 +243,7 @@ class PlanetDialog(qt.QDialog):
     def accept(self, *args):
         print(args)
 
-        
+
 if __name__ == '__main__':
     import sys, time
     app = qt.QApplication(sys.argv)

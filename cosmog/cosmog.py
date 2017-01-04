@@ -16,11 +16,35 @@ from scipy import signal
 from scipy.misc import imresize
 import scipy as sp
 
+
 class WorkerSignals(pg.QtCore.QObject):
     curve_result = pg.QtCore.Signal(object, object, object, object, int)
-    tpf_result = pg.QtCore.Signal(object, object, object, object, int)
+    tpf_result = pg.QtCore.Signal(object)
 
-    
+
+class TPFLoader(pg.QtCore.QRunnable):
+
+    def __init__(self, tpfs):
+        super().__init__()
+        self.tpfs = tpfs
+        self.signals = WorkerSignals()
+
+    def run(self):
+        all_flux = None
+        for ti, tpf in enumerate(self.tpfs):
+            with tpf.open() as f:
+                data = f[1].data
+                aperture = f[2].data
+            time, flux = data['time'], data['flux']
+            time = np.isfinite(time)
+            flux = flux[time]
+            print(flux.shape)
+            flux2 = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
+            all_flux = np.append(all_flux, flux2, axis=0) if all_flux is not None else flux2
+
+        self.signals.tpf_result.emit(all_flux)
+
+
 class LightCurveLoader(pg.QtCore.QRunnable):
 
     def __init__(self, index, curve):
@@ -44,7 +68,7 @@ class LightCurveLoader(pg.QtCore.QRunnable):
 
         self.signals.curve_result.emit(time, m, norm, bkg, self.index)
 
-            
+
 class PlanetGraph(qt.QWidget):
 
     def __init__(self, planet, start=0, stop=-1):
@@ -141,29 +165,21 @@ class PlanetGraph(qt.QWidget):
         self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
         self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
         self.zoom_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
-        
+
         if self.all_time is None:
             self.all_time = time[m]
         else:
             self.all_time = np.append(self.all_time, time[m], axis=0)
-            
+
         if self.all_data is None:
             self.all_data = norm
         else:
             self.all_data = np.append(self.all_data, norm, axis=0)
-            
-    def loadTargetPixels(self):
-        self.all_flux = []
-        for ti, tpf in enumerate(self.tpfs[self.start:self.stop]):
-            with tpf.open() as f:
-                data = f[1].data
-                aperture = f[2].data
-            time, flux = data['time'], data['flux']
-            flux2 = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
-            self.all_flux.append(flux2)
 
-        all_flux = np.concatenate(self.all_flux)
-        self.pixels.setImage(all_flux)
+    def loadTargetPixels(self):
+        t = TPFLoader(self.tpfs[self.start:self.stop])
+        t.signals.tpf_result.connect(self.pixels.setImage)
+        self.pool.start(t)
 
     def updateRegionChanged(self):
         self.region.setZValue(10)
@@ -172,7 +188,7 @@ class PlanetGraph(qt.QWidget):
         # if time.time() - self.last_pgram_update < 1:
         #     return
         # self.last_pgram_update = time.time()
-        
+
         # span = self.all_time[minX:maxX]
         # data = self.all_norm[minX:maxX]
         # t_days =  span * u.day
@@ -187,8 +203,7 @@ class PlanetGraph(qt.QWidget):
 
 class MainWindow(qt.QMainWindow):
     def __init__(self):
-        super(MainWindow, self).__init__()
-
+        super().__init__()
         self.tabs = qt.QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.closePlanet)
@@ -207,7 +222,7 @@ class MainWindow(qt.QMainWindow):
                 np=np,
                 signal=signal,
                 pywt=pywt,
-                kplr=kplr
+                kplr=kplr,
             ))
         self.tabs.addTab(console, 'Console')
 
@@ -226,7 +241,7 @@ class MainWindow(qt.QMainWindow):
 
     def closePlanet(self, index):
         if self.planets:
-            self.planets.pop(index) # don't pop the console
+            self.planets.pop(index-1) # don't pop the console
         self.tabs.removeTab(index)
 
     def createActions(self):

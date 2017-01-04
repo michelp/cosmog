@@ -20,6 +20,20 @@ import scipy as sp
 class WorkerSignals(pg.QtCore.QObject):
     curve_result = pg.QtCore.Signal(object, object, object, object, int)
     tpf_result = pg.QtCore.Signal(object)
+    ls_result = pg.QtCore.Signal(object, object)
+
+
+class LSComputer(pg.QtCore.QRunnable):
+
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
+        self.signals = WorkerSignals()
+
+    def run(self):
+        t_days =  span * u.day
+        freq, power = LombScargle(t_days, self.data).autopower()
+        self.signals.ls_result.emit(freq, power)
 
 
 class TPFLoader(pg.QtCore.QRunnable):
@@ -99,6 +113,7 @@ class PlanetGraph(qt.QWidget):
 
     def setupGrid(self):
         self.grid = qt.QGridLayout()
+        self.grid.setColumnStretch(0, 2)
         self.setLayout(self.grid)
 
     def setupLightCurve(self):
@@ -109,18 +124,18 @@ class PlanetGraph(qt.QWidget):
         self.light_curve.showButtons()
         self.light_curve.setAutoVisible(y=True)
         self.light_curve.enableAutoRange('y', 0.97)
-        self.grid.addWidget(self.light_curve, 0, 0, 1, 3)
+        self.grid.addWidget(self.light_curve, 0, 0, 1, 4)
 
     def setupZoomPlot(self):
         self.zoom_curve = pg.PlotWidget(name=self.planet.kepler_name)
         #self.zoom_curve.setDownsampling(auto=True)
         self.zoom_curve.showGrid(x=True, y=True)
         self.zoom_curve.showButtons()
-        self.grid.addWidget(self.zoom_curve, 1, 0, 1, 3)
+        self.grid.addWidget(self.zoom_curve, 1, 0, 1, 4)
 
     def setupTargetPixels(self):
         self.pixels = pg.ImageView()
-        self.grid.addWidget(self.pixels, 1, 4)
+        self.grid.addWidget(self.pixels, 1, 5)
 
     def setupRegion(self):
         self.region = pg.LinearRegionItem()
@@ -151,7 +166,8 @@ class PlanetGraph(qt.QWidget):
 
     def setupPeriodogram(self):
         self.pgram = pg.PlotWidget(name='Periodogram')
-        #self.grid.addWidget(self.pgram, 0, 4)
+        self.pgram.setLogMode(x=True)
+        self.grid.addWidget(self.pgram, 0, 5)
 
     def loadLightCurves(self):
         self.all_time = None
@@ -185,16 +201,16 @@ class PlanetGraph(qt.QWidget):
         self.region.setZValue(10)
         minX, maxX = self.region.getRegion()
         self.zoom_curve.setXRange(minX, maxX, padding=0)
-        # if time.time() - self.last_pgram_update < 1:
-        #     return
-        # self.last_pgram_update = time.time()
+        if time.time() - self.last_pgram_update < 1:
+            return
+        self.last_pgram_update = time.time()
 
-        # span = self.all_time[minX:maxX]
-        # data = self.all_norm[minX:maxX]
-        # t_days =  span * u.day
-        # freq, power = LombScargle(t_days, data).autopower()
-        # self.pgram.clear()
-        # self.pgram.plot(freq, power)
+        span = self.all_time[minX:maxX]
+        data = self.all_data[minX:maxX]
+        t_days =  span * u.day
+        freq, power = LombScargle(t_days, data).autopower()
+        self.pgram.clear()
+        self.pgram.plot(freq, power**2)
 
     def updateRange(self, window, viewRange):
         rgn = viewRange[0]

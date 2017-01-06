@@ -1,8 +1,9 @@
 
 ![Screenshot](/screenshot2.png?raw=true "Screenshot 2 of Cosmog")
 
-# cosmog Visualizing
-[Kepler](https://en.wikipedia.org/wiki/Kepler_(spacecraft)) exoplanet
+# cosmog
+
+Visualizing[Kepler](https://en.wikipedia.org/wiki/Kepler_(spacecraft)) exoplanet
 data with pyqtgraph.  This is a work in progress.
 
 End goal is to provide something interactive and informative for

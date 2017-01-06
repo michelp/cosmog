@@ -25,13 +25,14 @@ class WorkerSignals(pg.QtCore.QObject):
 
 class LSComputer(pg.QtCore.QRunnable):
 
-    def __init__(self, data):
+    def __init__(self, span, data):
         super().__init__()
+        self.span = span
         self.data = data
         self.signals = WorkerSignals()
 
     def run(self):
-        t_days =  span * u.day
+        t_days =  self.span * u.day
         freq, power = LombScargle(t_days, self.data).autopower()
         self.signals.ls_result.emit(freq, power)
 
@@ -52,7 +53,6 @@ class TPFLoader(pg.QtCore.QRunnable):
             time, flux = data['time'], data['flux']
             time = np.isfinite(time)
             flux = flux[time]
-            print(flux.shape)
             flux2 = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
             all_flux = np.append(all_flux, flux2, axis=0) if all_flux is not None else flux2
 
@@ -84,6 +84,8 @@ class LightCurveLoader(pg.QtCore.QRunnable):
 
 
 class PlanetGraph(qt.QWidget):
+
+    last_pgram_update = None
 
     def __init__(self, planet, start=0, stop=-1):
         super().__init__()
@@ -145,7 +147,6 @@ class PlanetGraph(qt.QWidget):
         self.region.sigRegionChanged.connect(self.updateRegionChanged)
         self.zoom_curve.sigRangeChanged.connect(self.updateRange)
         self.region.setRegion([90., 180.])
-        self.last_pgram_update = time.time()
 
     def setupCrosshair(self):
         self.last_tpf_update = time.time()
@@ -162,7 +163,8 @@ class PlanetGraph(qt.QWidget):
             index = int(mousePoint.x())
             self.vLine.setPos(mousePoint.x())
             self.hLine.setPos(mousePoint.y())
-            self.pixels.setCurrentIndex(bisect_left(self.all_time, mousePoint.x()))
+            if self.last_pgram_update is not None:
+                self.pixels.setCurrentIndex(bisect_left(self.all_time, mousePoint.x()))
 
     def setupPeriodogram(self):
         self.pgram = pg.PlotWidget(name='Periodogram')
@@ -201,16 +203,20 @@ class PlanetGraph(qt.QWidget):
         self.region.setZValue(10)
         minX, maxX = self.region.getRegion()
         self.zoom_curve.setXRange(minX, maxX, padding=0)
-        if time.time() - self.last_pgram_update < 1:
-            return
-        self.last_pgram_update = time.time()
 
         span = self.all_time[minX:maxX]
         data = self.all_data[minX:maxX]
-        t_days =  span * u.day
-        freq, power = LombScargle(t_days, data).autopower()
+        t = LSComputer(span, data)
+        t.signals.ls_result.connect(self.updatePgram)
+        self.pool.start(t)
+
+    def updatePgram(self, freq, power):
         self.pgram.clear()
         self.pgram.plot(freq, power**2)
+        if self.last_pgram_update is not None:
+            if time.time() - self.last_pgram_update < 1:
+                return
+        self.last_pgram_update = time.time()
 
     def updateRange(self, window, viewRange):
         rgn = viewRange[0]

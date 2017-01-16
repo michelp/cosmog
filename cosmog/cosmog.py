@@ -18,12 +18,13 @@ import scipy as sp
 
 
 class WorkerSignals(pg.QtCore.QObject):
+    
     curve_result = pg.QtCore.Signal(object, object, object, object, int)
     tpf_result = pg.QtCore.Signal(object)
     ls_result = pg.QtCore.Signal(object, object)
 
 
-class LSComputer(pg.QtCore.QRunnable):
+class LombScargleWorker(pg.QtCore.QRunnable):
 
     def __init__(self, span, data):
         super().__init__()
@@ -37,7 +38,7 @@ class LSComputer(pg.QtCore.QRunnable):
         self.signals.ls_result.emit(freq, power)
 
 
-class TPFLoader(pg.QtCore.QRunnable):
+class TargetPixelFileLoader(pg.QtCore.QRunnable):
 
     def __init__(self, tpfs):
         super().__init__()
@@ -46,21 +47,21 @@ class TPFLoader(pg.QtCore.QRunnable):
 
     def run(self):
         all_flux = None
-        for ti, tpf in enumerate(self.tpfs):
+        for tpf in self.tpfs:
             with tpf.open() as f:
                 data = f[1].data
                 aperture = f[2].data
             time, flux = data['time'], data['flux']
             time = np.isfinite(time)
             flux = flux[time]
-            flux2 = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])# if np.all(np.isfinite(i))])
-            all_flux = np.append(all_flux, flux2, axis=0) if all_flux is not None else flux2
+            flux = np.asarray([imresize(abs(i) ** 2, (20, 20), mode='F') for i in flux])
+            all_flux = np.append(all_flux, flux, axis=0) if all_flux is not None else flux
 
         self.signals.tpf_result.emit(all_flux)
 
 
 class LightCurveLoader(pg.QtCore.QRunnable):
-
+    
     def __init__(self, index, curve):
         super().__init__()
         self.index = index
@@ -120,7 +121,7 @@ class PlanetGraph(qt.QWidget):
 
     def setupLightCurve(self):
         self.light_curve = pg.PlotWidget(name=self.planet.kepler_name)
-        #self.light_curve.setDownsampling(auto=True)
+        self.light_curve.setDownsampling(auto=True)
         self.light_curve.setClipToView(True)
         self.light_curve.showGrid(x=True, y=True)
         self.light_curve.showButtons()
@@ -130,7 +131,7 @@ class PlanetGraph(qt.QWidget):
 
     def setupZoomPlot(self):
         self.zoom_curve = pg.PlotWidget(name=self.planet.kepler_name)
-        #self.zoom_curve.setDownsampling(auto=True)
+        self.zoom_curve.setDownsampling(auto=True)
         self.zoom_curve.showGrid(x=True, y=True)
         self.zoom_curve.showButtons()
         self.grid.addWidget(self.zoom_curve, 1, 0, 1, 4)
@@ -180,9 +181,11 @@ class PlanetGraph(qt.QWidget):
             self.pool.start(t)
 
     def plotLightCurve(self, time, m, norm, bkg, li):
-        self.light_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
-        self.light_curve.plot(time, bkg, pen=pg.mkPen('y'))
-        self.zoom_curve.plot(time[m], norm, pen=None, symbol='x', symbolPen=None, symbolSize=10, symbolBrush=pg.mkBrush(li))
+        brush = pg.mkBrush(li)
+        bkg_pen = pg.mkPen('y')
+        self.light_curve.plot(time[m], norm, pen=None, symbol='+', symbolSize=8, symbolPen=None, symbolBrush=brush)
+        self.light_curve.plot(time, bkg, pen=bkg_pen)
+        self.zoom_curve.plot(time[m], norm, pen=None, symbol='+', symbolSize=8, symbolPen=None, symbolBrush=brush)
 
         if self.all_time is None:
             self.all_time = time[m]
@@ -195,7 +198,7 @@ class PlanetGraph(qt.QWidget):
             self.all_data = np.append(self.all_data, norm, axis=0)
 
     def loadTargetPixels(self):
-        t = TPFLoader(self.tpfs[self.start:self.stop])
+        t = TargetPixelFileLoader(self.tpfs[self.start:self.stop])
         t.signals.tpf_result.connect(self.pixels.setImage)
         self.pool.start(t)
 
@@ -206,7 +209,7 @@ class PlanetGraph(qt.QWidget):
 
         span = self.all_time[minX:maxX]
         data = self.all_data[minX:maxX]
-        t = LSComputer(span, data)
+        t = LombScargleWorker(span, data)
         t.signals.ls_result.connect(self.updatePgram)
         self.pool.start(t)
 
